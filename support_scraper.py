@@ -19,7 +19,7 @@ Palo Alto Networks support_scraper.py
 
 Downloads the latest release notes and updates off the support portal.
 
-No external config necessary. Run with a Chrome driver and instance.
+Run with a Chrome driver and instance. Configure in a ~/.panrc file.
 
 This software is provided without support, warranty, or guarantee.
 Use at your own risk.
@@ -29,7 +29,7 @@ import logging
 from logging.config import dictConfig
 import os
 import pickle
-from time import sleep
+from time import sleep, time
 
 from dotenv import load_dotenv
 from selenium import webdriver
@@ -52,10 +52,9 @@ class SupportScraper:
     download_dir -- where to download the notes to
 
     '''
-    def __init__(self,
-                 chrome_driver='chromedriver',
+    def __init__(self, chrome_driver='chromedriver',
                  binary_location='/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-                 download_dir='contentpacks'):
+                 download_dir=f"{os.getenv('HOME')}/Downloads"):
         # Set up driver
         chrome_options = Options()
         chrome_options.binary_location = binary_location
@@ -76,6 +75,14 @@ class SupportScraper:
 
 
     def __del__(self):
+        # Wait for files to finish downloading before we close out.
+        logging.info("Waiting for all files to finish downloading.")
+        sleep(5)  # let the driver start downloading
+        file_list = self._list_all_download_files()
+        while 'Unconfirmed' in file_list or 'crdownload' in file_list:
+            file_list = self._list_all_download_files()
+            sleep(1)
+        logging.info("Finished downloading everything.")
         self._driver.close()
 
 
@@ -155,7 +162,7 @@ class SupportScraper:
         if self._on_update_page != update_type:
             self._find_update_page(update_type)
 
-        logging.debug(f"Downloading {update_type} {key} {'notes' if is_notes else 'raw files'} from version {self.contents[update_type][key]['version']} from support portal.")
+        logging.info(f"Downloading {update_type} {key} {'notes' if is_notes else 'raw files'} from version {self.contents[update_type][key]['version']} from support portal.")
         while True:
             try:
                 self.contents[update_type][key]['notes' if is_notes else 'download'].click()
@@ -177,13 +184,18 @@ class SupportScraper:
                 self._driver.switch_to.window(self._main_handle)
 
 
+    def _list_all_download_files(self):
+        '''
+        See if there are any unfinished files in the download folder.
+        '''
+        for (dirpath, dirnames, filenames) in os.walk(self._download_dir):
+            return str(filenames)
+
+
 
 if __name__ == '__main__':
     # Load in config.
     home = os.getenv('HOME')
-    dot = os.getenv('PWD')
-    env_path = os.path.join(dot, 'src', 'lib', '.defaultrc')
-    load_dotenv(dotenv_path=env_path, verbose=True)
     env_path = os.path.join(home, '.panrc')
     load_dotenv(dotenv_path=env_path, verbose=True, override=True)
 
@@ -199,14 +211,14 @@ if __name__ == '__main__':
             'formatter': 'default'
         }},
         'root': {
-            'level': 'DEBUG',
+            'level': os.getenv('LOGGING_LEVEL'),
             'handlers': ['wsgi']
         }
     })
 
     scraper = SupportScraper(chrome_driver=os.getenv('DRIVER'),
                              binary_location=os.getenv('BINARY_LOCATION'),
-                             download_dir=os.getenv('DOWNLOAD_DIR'))
+                             download_dir=os.getenv('DEFAULT_DOWNLOAD_DIR'))
 
     scraper.download_latest_release('Dynamic', 'Apps', False)
 
