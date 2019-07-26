@@ -28,7 +28,6 @@ Use at your own risk.
 import logging
 from logging.config import dictConfig
 import os
-import pickle
 from time import sleep, time
 
 from dotenv import load_dotenv
@@ -40,21 +39,18 @@ from selenium.webdriver.chrome.options import Options
 
 class SupportScraper:
     '''
-    A web scraping utility that downloads release notes from a firewall.
-    Does NOT use elasticsearch.
+    A web scraping utility that downloads updates from the support portal.
 
     Non-keyword arguments:
-    ip -- the IP of the firewall to scrape
-    username -- the firewall username
-    password -- the firewall password
     chrome_driver -- the name of the Chrome driver to use
     binary_location -- the path to the Chrome binary
-    download_dir -- where to download the notes to
+    download_dir -- the default directory where Chrome downloads files
+    login_time -- how long we wait for you to log in
 
     '''
     def __init__(self, chrome_driver='chromedriver',
                  binary_location='/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-                 download_dir=f"{os.getenv('HOME')}/Downloads"):
+                 download_dir=f"{os.getenv('HOME')}/Downloads", login_time=60):
         # Set up driver
         chrome_options = Options()
         chrome_options.binary_location = binary_location
@@ -70,6 +66,11 @@ class SupportScraper:
         self.contents = {}
         self._main_handle = None
         self._on_update_page = None
+        try:
+            self._login_time = int(login_time)
+        except ValueError:
+            # Can't convert to an int; use a default.
+            self._login_time = 60
 
         self._login()
 
@@ -82,37 +83,36 @@ class SupportScraper:
         while 'Unconfirmed' in file_list or 'crdownload' in file_list:
             file_list = self._list_all_download_files()
             sleep(1)
-        logging.info("Finished downloading everything.")
+        logging.info(f"Finished downloading everything. Any files downloaded may be found in {self._download_dir}")
         self._driver.close()
 
 
     def _login(self):
         '''Log into support portal.'''
+        # Until somebody drops the 2FA, use a manual login.
         self._driver.get(f"https://support.paloaltonetworks.com/")
-        # Try using cookies
-        try:
-            cookies = pickle.load(open("cookies.pkl", "rb"))
-            for cookie in cookies:
-                self._driver.add_cookie(cookie)
-        except FileNotFoundError:
-            # We can create the cookie file later.
-            pass
-
-        # Until somebody drops the 2FA, use a manual login to save cookies if necessary. Cookies expire daily.
-        if self._driver.current_url == 'https://support.paloaltonetworks.com/Support/Index':
-            # Looks like we're not logged in.
-            logging.info("Cookies expired or do not yet exist. Please log in.")
-            self._driver.get(f'https://identity.paloaltonetworks.com/idp/startSSO.ping?PartnerSpId=supportCSP&TargetResource=https://support.paloaltonetworks.com')
-            # Log in now. You have 1 minute.
-            sleep(30)
-            pickle.dump(self._driver.get_cookies() , open("cookies.pkl","wb"))
-            # Now we're logged in. Carry on with the rest of the script.
-            logging.info("Finished logging in.")
+        logging.info("USER INTERACTION REQUIRED: Please log in.")
+        self._driver.get(f'https://identity.paloaltonetworks.com/idp/startSSO.ping?PartnerSpId=supportCSP&TargetResource=https://support.paloaltonetworks.com')
+        # Log in now. You have 1 minute.
+        sleep(self._login_time)
+        # Now we're logged in. Carry on with the rest of the script.
+        logging.info("Finished waiting for you to log in.")
 
 
     def _find_update_page(self, update_type):
-        '''Navigate to get the links and details.'''
+        '''
+        Navigate to get the links and details.
+
+        Non-keyword arguments:
+        update_type -- a string determining update page to get from (Dynamic or Software)
+
+        '''
         self._driver.get(f"https://support.paloaltonetworks.com/Updates/{update_type}Updates/")
+        while self._driver.current_url == 'https://support.paloaltonetworks.com/Support/Index':
+            # Keep trying to log in.
+            self._login()
+            self._driver.get(f"https://support.paloaltonetworks.com/Updates/{update_type}Updates/")
+        logging.debug("Logged into support portal.")
 
         tbody = self._driver.find_element_by_xpath('//*[@id="Grid"]/table/tbody')
         trs = tbody.find_elements_by_xpath(".//tr")
@@ -142,7 +142,7 @@ class SupportScraper:
                     update['download'] = showing_tds[4]
                     self.contents[update_type][header] = update
                     new_section = False
-        
+
         # Save this as the base window before getting adventurous.
         self._main_handle = self._driver.current_window_handle
         self._on_update_page = update_type
@@ -153,11 +153,11 @@ class SupportScraper:
     def download_latest_release(self, update_type, key, is_notes):
         '''
         Download the page source of only the latest update.
-        
+
         Non-keyword arguments:
-        update_type - a string determining update page to get from (Dynamic or Software)
-        key - a string showing the section to go through and download a release from
-        is_notes - a bool of whether you want release notes OR the raw files
+        update_type -- a string determining update page to get from (Dynamic or Software)
+        key -- a string showing the section to go through and download a release from
+        is_notes -- a bool of whether you want release notes OR the raw files
         '''
         if self._on_update_page != update_type:
             self._find_update_page(update_type)
@@ -188,7 +188,7 @@ class SupportScraper:
         '''
         See if there are any unfinished files in the download folder.
         '''
-        for (dirpath, dirnames, filenames) in os.walk(self._download_dir):
+        for (_, _, filenames) in os.walk(self._download_dir):
             return str(filenames)
 
 
@@ -218,34 +218,35 @@ if __name__ == '__main__':
 
     scraper = SupportScraper(chrome_driver=os.getenv('DRIVER'),
                              binary_location=os.getenv('BINARY_LOCATION'),
-                             download_dir=os.getenv('DEFAULT_DOWNLOAD_DIR'))
+                             download_dir=os.getenv('DEFAULT_DOWNLOAD_DIR'),
+                             login_time=os.getenv('LOGIN_TIME'))
 
     scraper.download_latest_release('Dynamic', 'Apps', False)
 
     scraper.download_latest_release('Dynamic', 'WF-500 Content', False)
 
-    # PanOS
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-200 Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-220 Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-500 Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-800 Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-2000 Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-3000 Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-3200 Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-4000 Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-5000 Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-5200 Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-7000 Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for the PA-7000b Platform', False)
-    scraper.download_latest_release('Software', 'PAN-OS for VM-Series', False)
-    scraper.download_latest_release('Software', 'PAN-OS for VM-Series Base Images', False)
-    scraper.download_latest_release('Software', 'PAN-OS for VM-Series NSX Base Images', False)
-    scraper.download_latest_release('Software', 'PAN-OS for VM-Series SDX Base Images', False)
-    scraper.download_latest_release('Software', 'PAN-OS for VM-Series KVM Base Images', False)
-    scraper.download_latest_release('Software', 'PAN-OS for VM-Series Hyper-V Base Image', False)
+    # # PanOS
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-200 Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-220 Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-500 Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-800 Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-2000 Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-3000 Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-3200 Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-4000 Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-5000 Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-5200 Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-7000 Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for the PA-7000b Platform', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for VM-Series', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for VM-Series Base Images', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for VM-Series NSX Base Images', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for VM-Series SDX Base Images', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for VM-Series KVM Base Images', False)
+    # scraper.download_latest_release('Software', 'PAN-OS for VM-Series Hyper-V Base Image', False)
 
-    scraper.download_latest_release('Software', 'GlobalProtect Agent Bundle', False)
+    # scraper.download_latest_release('Software', 'GlobalProtect Agent Bundle', False)
 
-    scraper.download_latest_release('Software', 'Panorama M Images', False)
+    # scraper.download_latest_release('Software', 'Panorama M Images', False)
 
-    scraper.download_latest_release('Software', 'WF-500 Appliance Updates', False)
+    # scraper.download_latest_release('Software', 'WF-500 Appliance Updates', False)
