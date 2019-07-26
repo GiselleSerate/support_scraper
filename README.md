@@ -1,6 +1,6 @@
 # Support Scraper
 
-Scrapes the support portal for specified release notes or raw files. Written for Python 3.7. 
+Scrapes the Palo Alto Networks support portal for specified release notes or raw files. Written for Python 3.7. For this to work, you'll need a support portal login.
 
 ## Setup
 Download [Google Chrome](https://www.google.com/chrome/) and a corresponding [Chrome driver](https://sites.google.com/a/chromium.org/chromedriver/downloads).
