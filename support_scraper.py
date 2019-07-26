@@ -31,6 +31,7 @@ import os
 import pickle
 from time import sleep
 
+from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.common.exceptions import ElementClickInterceptedException
 from selenium.webdriver.chrome.options import Options
@@ -120,8 +121,10 @@ class SupportScraper:
                 if tr.get_attribute('class') == 'k-grouping-row':
                     # It's a header
                     header = str(tr.find_element_by_xpath('./td/p').get_attribute('innerHTML')).split('>')[-1]
-                    self.contents[update_type][header] = []
-                else:
+                    # Clean the header
+                    header = ' '.join(header.split())
+                    new_section = True
+                elif new_section:
                     # It's an update
                     tds = tr.find_elements_by_xpath('./td')
                     showing_tds = [td for td in tds if 'display: none' not in td.get_attribute('style')]
@@ -130,13 +133,14 @@ class SupportScraper:
                     update['date'] = showing_tds[2].get_attribute('innerHTML')
                     update['notes'] = showing_tds[3]
                     update['download'] = showing_tds[4]
-                    self.contents[update_type][header].append(update)
-                    logging.debug(len(self.contents[update_type]))
+                    self.contents[update_type][header] = update
+                    new_section = False
         
         # Save this as the base window before getting adventurous.
         self._main_handle = self._driver.current_window_handle
         self._on_update_page = update_type
         logging.debug(f"Finished reading in updates for {update_type} Updates.")
+        logging.debug(self.contents[update_type])
 
 
     def download_latest_release(self, update_type, key, is_notes):
@@ -148,38 +152,13 @@ class SupportScraper:
         key - a string showing the section to go through and download a release from
         is_notes - a bool of whether you want release notes OR the raw files
         '''
-        logging.info(f"Downloading the single latest {update_type} {'update notes' if is_notes else 'raw update'} from {key} from the support portal.")
         if self._on_update_page != update_type:
             self._find_update_page(update_type)
-        # Get the absolute latest release notes
-        latest = max(self.contents[update_type][key], key=lambda x: x['date'])
-        self._download_release(update_type, key, is_notes, latest)
 
-
-    def download_all_available_releases(self, update_type, key, is_notes):
-        '''
-        Download the page source for all releases of a certain type on the support portal.
-
-        Non-keyword arguments:
-        update_type - a string determining update page to get from (Dynamic or Software)
-        key - a string showing the section to go through and download a release from
-        is_notes - a bool of whether you want release notes OR the raw files
-        '''
-        logging.info(f"Downloading all {update_type} releases for {key} from the support portal.")
-        if self._on_update_page != update_type:
-            self._find_update_page(update_type)
-        for ver in self.contents[update_type][key]:
-            self._download_release(update_type, key, is_notes, ver)
-
-
-    def _download_release(self, update_type, key, is_notes, release):
-        '''
-        Download the specified release from the support portal.
-        '''
-        logging.debug(f"Downloading {update_type} {key} {'notes' if is_notes else 'raw files'} from version {release['version']} from support portal.")
+        logging.debug(f"Downloading {update_type} {key} {'notes' if is_notes else 'raw files'} from version {self.contents[update_type][key]['version']} from support portal.")
         while True:
             try:
-                release['notes' if is_notes else 'download'].click()
+                self.contents[update_type][key]['notes' if is_notes else 'download'].click()
                 break
             except ElementClickInterceptedException:
                 # They're blocking the UI, try again.
@@ -190,7 +169,7 @@ class SupportScraper:
                 self._driver.switch_to.window(handle)
                 # Save to disk
                 os.chdir(self._download_dir)
-                filename = f"Updates_{update_type}_{key}_{release['version']}.html"
+                filename = f"Updates_{update_type}_{key}_{self.contents[update_type][key]['version']}.html"
                 with open(filename, 'w') as file:
                     file.write(self._driver.page_source)
                 # Go back to previous page
@@ -200,6 +179,14 @@ class SupportScraper:
 
 
 if __name__ == '__main__':
+    # Load in config.
+    home = os.getenv('HOME')
+    dot = os.getenv('PWD')
+    env_path = os.path.join(dot, 'src', 'lib', '.defaultrc')
+    load_dotenv(dotenv_path=env_path, verbose=True)
+    env_path = os.path.join(home, '.panrc')
+    load_dotenv(dotenv_path=env_path, verbose=True, override=True)
+
     # Config logging.
     dictConfig({
         'version': 1,
@@ -217,9 +204,9 @@ if __name__ == '__main__':
         }
     })
 
-    scraper = SupportScraper(chrome_driver='/Users/gserate/_dev/pandorica/vanilladriver',
-                             binary_location='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-                             download_dir="/Users/gserate/_dev/content_notes")
+    scraper = SupportScraper(chrome_driver=os.getenv('DRIVER'),
+                             binary_location=os.getenv('BINARY_LOCATION'),
+                             download_dir=os.getenv('DOWNLOAD_DIR'))
 
     scraper.download_latest_release('Dynamic', 'Apps', False)
 
