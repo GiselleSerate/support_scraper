@@ -11,11 +11,13 @@ BINARY_LOCATION=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 DRIVER=${HOME}/vanilladriver
 LOGGING_LEVEL=INFO
 DEFAULT_DOWNLOAD_DIR=${HOME}/Downloads
+LOGIN_TIME=30
 ```
 * `BINARY_LOCATION`: path to your Chrome executable
 * `DRIVER`: path to your Chrome driver
 * `LOGGING_LEVEL`: defines what log messages to print to console; one of `CRITICAL`, `ERROR`, `WARNING`, `INFO`, `DEBUG`
 * `DEFAULT_DOWNLOAD_DIR`: path to the directory where Chrome dumps download files by default
+* `LOGIN_TIME`: number of seconds to wait for the user to log in
 
 Install the `requirements.txt` file, preferably in a virtual environment. From this repository: 
 ```
